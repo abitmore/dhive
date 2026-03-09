@@ -196,19 +196,22 @@ export async function retryingFetch(
       const response = await fetch(node, opts)
 
       if (!response.ok) {
-        // Support for Drone: HTTP 500 with valid JSON-RPC response
-        if (response.status === 500) {
-          try {
-            const resJson = await response.json()
-            if (resJson.jsonrpc === '2.0') {
-              if (healthTracker && api) healthTracker.recordSuccess(node, api)
-              return { response: resJson, currentAddress: node }
-            }
-          } catch {
-            // JSON parse failed, fall through to error handling
+        // Some Hive nodes return non-200 HTTP status (500, 502, 503, 429, etc.)
+        // but still include a valid JSON-RPC response in the body.
+        // This happens when a node is overloaded — it processes the transaction
+        // but returns an error HTTP status. For broadcasts, ignoring the body
+        // would cause the caller to think it failed, leading to double-posts.
+        try {
+          const resJson = await response.json()
+          if (resJson.jsonrpc === '2.0') {
+            if (healthTracker && api) healthTracker.recordSuccess(node, api)
+            return { response: resJson, currentAddress: node }
           }
+        } catch {
+          // JSON parse failed, fall through to error handling
         }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        const statusText = response.statusText || `status code ${response.status}`
+        throw new Error(`HTTP ${response.status}: ${statusText}`)
       }
 
       const responseJson = await response.json()
